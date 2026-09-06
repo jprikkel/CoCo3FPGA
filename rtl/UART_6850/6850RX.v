@@ -1,20 +1,21 @@
 ////////////////////////////////////////////////////////////////////////////////
-// Project Name:	CoCo3FPGA Version 3.0
-// File Name:		6850RX.v
+// Project Name:	CoCo3FPGA Version 4.0
+// File Name:		6850rx.v
 //
 // CoCo3 in an FPGA
 //
-// Revision: 3.0 08/15/15
+// Revision: 4.0 07/10/16
 ////////////////////////////////////////////////////////////////////////////////
 //
 // CPU section copyrighted by John Kent
 // The FDC co-processor copyrighted Daniel Wallner.
+// SDRAM Controller copyrighted by XESS Corp.
 //
 ////////////////////////////////////////////////////////////////////////////////
 //
 // Color Computer 3 compatible system on a chip
 //
-// Version : 3.0
+// Version : 4.0
 //
 // Copyright (c) 2008 Gary Becker (gary_l_becker@yahoo.com)
 //
@@ -55,9 +56,12 @@
 //
 // File history :
 //
-//  1.0		Full Release
-//  2.0		Partial Release
-//  3.0		Full Release
+//  1.0			Full Release
+//  2.0			Partial Release
+//  3.0			Full Release
+//  3.0.0.1		Update to fix DoD interrupt issue
+//	3.0.1.0		Update to fix 32/40 CoCO3 Text issue and add 2 Meg max memory
+//	4.0.X.X		Full Release
 ////////////////////////////////////////////////////////////////////////////////
 // Gary Becker
 // gary_L_becker@yahoo.com
@@ -83,11 +87,14 @@ input					BAUD_CLK;
 input					RX_DATA;
 output	[7:0]		RX_BUFFER;
 reg		[7:0]		RX_BUFFER;
+//input					RX_READY;
 input					RX_WORD;
 input					RX_PAR_DIS;
 input					RX_PARITY;
 output				PARITY_ERR;
 reg					PARITY_ERR;
+//output				OVERRUN;
+//reg					OVERRUN;
 output				FRAME;
 reg					FRAME;
 output				READY;
@@ -104,6 +111,7 @@ begin
 	begin
 		RX_BUFFER <= 8'h00;
 		STATE <= 6'b000000;
+//		OVERRUN <= 1'b0;
 		FRAME <= 1'b0;
 		BIT <= 3'b000;
 		RX_DATA0 <= 1'b1;
@@ -128,7 +136,9 @@ begin
 		end
 		6'b010111:								// Middle of data bits
 		begin
+//			READY <= 1'b0;
 			RX_BUFFER[BIT] <= RX_DATA1;
+//			OVERRUN <= RX_READY;
 			STATE <= 6'b011000;
 		end
 		6'b011111:								// End of data bit
@@ -141,7 +151,7 @@ begin
 					STATE <= 6'b100000;
 				else
 				begin
-					BIT <= BIT + 1'b1;
+					BIT <= BIT + 1;
 					STATE <= 6'b010000;
 				end
 			end
@@ -174,7 +184,7 @@ begin
 			if(RX_DATA1)						// wait until data = 1
 				STATE <= 6'b000000;
 		end
-		default: STATE <= STATE + 1'b1;
+		default: STATE <= STATE + 1;
 		endcase
 	end
 end

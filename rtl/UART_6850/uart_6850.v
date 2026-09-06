@@ -1,20 +1,21 @@
 ////////////////////////////////////////////////////////////////////////////////
-// Project Name:	CoCo3FPGA Version 3.0
+// Project Name:	CoCo3FPGA Version 4.0
 // File Name:		uart_6850.v
 //
 // CoCo3 in an FPGA
 //
-// Revision: 3.0 08/15/15
+// Revision: 4.0 07/10/16
 ////////////////////////////////////////////////////////////////////////////////
 //
 // CPU section copyrighted by John Kent
 // The FDC co-processor copyrighted Daniel Wallner.
+// SDRAM Controller copyrighted by XESS Corp.
 //
 ////////////////////////////////////////////////////////////////////////////////
 //
 // Color Computer 3 compatible system on a chip
 //
-// Version : 3.0
+// Version : 4.0
 //
 // Copyright (c) 2008 Gary Becker (gary_l_becker@yahoo.com)
 //
@@ -55,9 +56,12 @@
 //
 // File history :
 //
-//  1.0		Full Release
-//  2.0		Partial Release
-//  3.0		Full Release
+//  1.0			Full Release
+//  2.0			Partial Release
+//  3.0			Full Release
+//  3.0.0.1		Update to fix DoD interrupt issue
+//	3.0.1.0		Update to fix 32/40 CoCO3 Text issue and add 2 Meg max memory
+//	4.0.X.X		Full Release
 ////////////////////////////////////////////////////////////////////////////////
 // Gary Becker
 // gary_L_becker@yahoo.com
@@ -80,6 +84,7 @@ RTS,
 CTS,
 DCD
 );
+
 
 input					RESET_N;
 input					RX_CLK;
@@ -145,8 +150,8 @@ assign RESET_X = (COUNTER_DIVIDE == 2'b11) ?	1'b0:
 //							IRQ   PE
 assign STATUS_REG = {!IRQ, PARITY, OVERRUN, FRAME, CTS, DCD, TDRE, RDRF};
 
-assign DO =	RS		?	RX_REG[7:0]:
-							STATUS_REG;
+assign DO =	RS		?	RX_REG[7:0]:		// SR=1
+							STATUS_REG;			// SR=0
 
 assign IRQ =	({CTL_REG[7], RDRF} == 2'b11)		?	1'b0:
 					({CTL_REG[6:5], TDRE} == 3'b011)	?	1'b0:	1'b1;

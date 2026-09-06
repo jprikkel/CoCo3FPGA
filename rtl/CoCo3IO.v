@@ -1,20 +1,21 @@
 ////////////////////////////////////////////////////////////////////////////////
-// Project Name:	CoCo3FPGA Version 3.0
-// File Name:		CoCo3IO.v
+// Project Name:	CoCo3FPGA Version 4.0
+// File Name:		coco3fpga.v
 //
 // CoCo3 in an FPGA
 //
-// Revision: 3.0 08/15/15
+// Revision: 4.0 07/10/16
 ////////////////////////////////////////////////////////////////////////////////
 //
 // CPU section copyrighted by John Kent
 // The FDC co-processor copyrighted Daniel Wallner.
+// SDRAM Controller copyrighted by XESS Corp.
 //
 ////////////////////////////////////////////////////////////////////////////////
 //
 // Color Computer 3 compatible system on a chip
 //
-// Version : 3.0
+// Version : 4.0
 //
 // Copyright (c) 2008 Gary Becker (gary_l_becker@yahoo.com)
 //
@@ -55,9 +56,12 @@
 //
 // File history :
 //
-//  1.0		Full Release
-//  2.0		Partial Release
-//  3.0		Full Release
+//  1.0			Full Release
+//  2.0			Partial Release
+//  3.0			Full Release
+//  3.0.0.1		Update to fix DoD interrupt issue
+//	3.0.1.0		Update to fix 32/40 CoCO3 Text issue and add 2 Meg max memory
+//	4.0.X.X		Full Release
 ////////////////////////////////////////////////////////////////////////////////
 // Gary Becker
 // gary_L_becker@yahoo.com
@@ -66,8 +70,14 @@
 /*****************************************************************************
 * Floppy
 ******************************************************************************/
-assign PH2_02 = MCLOCK[1];			//12.5 MHz
-assign CPU_RESET_N = !CPU_RESET;
+assign CPU_RESET_N = !CPU_RESET & !SLAVE_RESET;
+
+//assign PH2_02 = MCLOCK[2];			//6.25 MHz
+
+PH2_CLK	PH2_02_inst (
+	.inclk ( MCLOCK[2] ),				// 6.25 MHz
+	.outclk ( PH2_02 )
+	);
 
 T65 GLB6502(
   .Clk(~PH2_02),
@@ -152,14 +162,18 @@ T65 GLB6502(
 * F41C			I2C Register
 * F41D			I2C Data
 * F41E			I2C Status
+* F41F			WF_FIFO Read / Write
 * F500-F57F		6850 UART
-* F580-F5FF		SPI Control / Status
+* F580-F5fF		WiFi 6850 UART
 * F600-F7FF    6502 DISK BUFFER
 * F800-FFFF		Mirror of Secondary RAM/ROM and Vectors
 *******************************************************************************/
 
-assign	DATA_IN_02 =								RAM02_00_EN 		?	DATAO_02_HDD:			// 0000-07FF and F800-FFFF
-															COM1_EN				?	DATA_COM1:				// F500-F5FF
+assign	DATA_IN_02 =								RAM02_00_EN 		?	DATAO2_00_HDD:			// 0000-01FF
+															RAM02_02_EN 		?	DATAO2_02_HDD:			// 2000-32FFF
+															RAM02_03_EN 		?	DATAO2_03_HDD:			// 23000-3FFF and F800-FFFF
+															COM1_EN				?	DATA_COM1:				// F500-F57F
+															COM2_EN				?	DATA_COM2:				// F580-F5FF
 															DISKBUF_02			?	DISK_BUF_Q:				// F600-F7FF
 	({ADDRESS_02[15:8], ADDRESS_02[4:0]} == 13'b1111010000000)	?	DWK:						// F4+00
 	({ADDRESS_02[15:8], ADDRESS_02[4:0]} == 13'b1111010000001)	?	SEC:						// F4+01
@@ -188,7 +202,9 @@ assign	DATA_IN_02 =								RAM02_00_EN 		?	DATAO_02_HDD:			// 0000-07FF and F800
 																						IRQ_RESET}:				// Used to reset the Interrupt going to 6502
 	({ADDRESS_02[15:8], ADDRESS_02[4:0]} == 13'b1111010010010)	?	{HALT_SIG_BUF1,		// F4+12	Used to inform 6502 that 6809 is halted
 																						ADDR_100_BUF1,			// Used to inform 6502 data address is 0x100
-																						3'h0,
+																						1'b0,
+																						WF_RDFIFO_WRFULL,
+																						!WF_WRFIFO_RDEMPTY,
 																						RDFIFO_WRFULL,
 																						!WRFIFO_RDEMPTY,
 																						SEC[5]}:					//Update
@@ -212,21 +228,33 @@ assign	DATA_IN_02 =								RAM02_00_EN 		?	DATAO_02_HDD:			// 0000-07FF and F800
 																						I2C_FAIL,
 																						I2C_START,
 																						5'b00000}:
+	({ADDRESS_02[15:8], ADDRESS_02[4:0]} == 13'b1111010011111)	?	WF_WRFIFO_DATA:		// F4+1F
 																						8'hAA;
 
-assign	RAM02_00_EN =		(ADDRESS_02[15:11] == 5'b00000)										// Zero Page 	(0000h to 07FFh)
-								|	(ADDRESS_02[15:11] == 5'b11111);										// Mirror/Vectors (F800-FFFF)
-assign	COM1_EN = 			(ADDRESS_02[15:8]  == 8'b11110101);									// UART (F500h to F5FFh)
-assign	DISKBUF_02 = 		(ADDRESS_02[15:9]  == 7'b1111011);									// F600-F7FF	Buffers 	(F600h to F7FFh)
+assign	RAM02_00_EN =		(ADDRESS_02[15:9] == 7'b0000000);			// Zero Page and stack 	(0000h to 01FFh)
+assign	RAM02_02_EN =		(ADDRESS_02[15:12] == 3'b0010);				// Code (2000h to 3FFFh)
+assign	RAM02_03_EN =		(ADDRESS_02[15:12] == 3'b0011)				// Code (2000h to 3FFFh)
+								|	(ADDRESS_02[15:11] == 5'b11111);				// Mirror/Vectors (F800-FFFF)
+assign	COM1_EN = 			(ADDRESS_02[15:7]  == 9'b111101010);		// UART (F500h to F57Fh)
+assign	COM2_EN = 			(ADDRESS_02[15:7]  == 9'b111101011);		// UART (F580h to F5FFh)
+assign	DISKBUF_02 = 		(ADDRESS_02[15:9]  == 7'b1111011);			// F600-F7FF	Buffers 	(F600h to F7FFh)
 
 assign	WRFIFO_RDREQ =		({ADDRESS_02[15:8], ADDRESS_02[4:0],
-									RW_02_N, WRFIFO_RDEMPTY}
+										RW_02_N, WRFIFO_RDEMPTY}
 													== 15'b111101001101010)	?	1'b1:						// F4+1A (Write)
 																						1'b0;
-
 assign	RDFIFO_WRREQ =		({ADDRESS_02[15:8], ADDRESS_02[4:0],
 									RW_02_N, RDFIFO_WRFULL}
 													== 15'b111101001101000)	?	1'b1:						// F4+1A (Read)
+																						1'b0;
+assign	WF_WRFIFO_RDREQ =		({ADDRESS_02[15:8], ADDRESS_02[4:0],
+										RW_02_N, WF_WRFIFO_RDEMPTY}
+													== 15'b111101001111110)	?	1'b1:						// F4+1F (Write)
+																						1'b0;
+
+assign	WF_RDFIFO_WRREQ =		({ADDRESS_02[15:8], ADDRESS_02[4:0],
+										RW_02_N, WF_RDFIFO_WRFULL}
+													== 15'b111101001111100)	?	1'b1:						// F4+1F (Read)
 																						1'b0;
 
 always @(negedge PH2_02 or negedge RESET_N)
@@ -354,14 +382,16 @@ end
 
 assign HALT =	  IMM_HALT_09												// Immediate halt
 					| WRFIFO_WRFULL											// Test for FIFO FULL error
+//					| WF_WRFIFO_WRFULL										// Test for WF FIFO FULL error
 					| HALT_STATE[6]											// Halt if A HALT command code is issued
 					| (HALT_100_09 & BUFF_ADD[8]) 						// Halt after reading / writing buffer
 					| SPI_HALT;													// Activity on the SPI bus
 
-assign NMI_09	=	DENSITY & FORCE_NMI_09_BUF1;				// Send NMI if Double Density (Halt Mode)
+assign	NMI_09	=	DENSITY & FORCE_NMI_09_BUF1;					// Send NMI if Double Density (Halt Mode)
 
-assign	IRQ_09 = 	(DENSITY &	IRQ_09_BUF2)						// Send IRQ if Double Density (No Halt)
-				|	(!RDFIFO_RDEMPTY & BI_IRQ_EN);
+assign	IRQ_09	= 	(DENSITY &	IRQ_09_BUF2)						// Send IRQ if Double Density (No Halt)
+						|	(!RDFIFO_RDEMPTY & BI_IRQ_EN)					// BI IRQ
+						|	(!WF_RDFIFO_RDEMPTY & WF_IRQ_EN);			// WiFi IRQ
 
 always @(negedge PH_2 or negedge RESET_N)
 begin
@@ -382,7 +412,7 @@ begin
 		ADDR_RST_BUFF1_N <= ADDR_RST_BUFF0_N;
 		FORCE_NMI_09_BUF0 <= NMI_09_EN;							// Double buffer NMI
 		FORCE_NMI_09_BUF1 <= FORCE_NMI_09_BUF0;
-		HALT_BUF0 <= HALT | !act_led_n;										// Double buffer Halt, Haltis generated by FDD and SD Card
+		HALT_BUF0 <= HALT;											// Double buffer Halt
 		HALT_BUF1 <= HALT_BUF0;
 		HALT_BUF2 <= HALT_BUF1;
 		if(!ADDR_RST_BUFF1_N)
@@ -398,14 +428,35 @@ begin
 		end
 	end
 end
-// 2K 6502 firmware block
+// 512 byte 6502 Zero Page and Stack
 disk02	disk02_inst (
-	.address (ADDRESS_02[10:0]),
+	.address (ADDRESS_02[8:0]),
 	.clock (PH2_02),
 	.data (DATA_OUT_02),
 	.wren (!RW_02_N & RAM02_00_EN),
-	.q (DATAO_02_HDD)
+	.q (DATAO2_00_HDD)
 	);
+// 4K Firmware block at $2000 Writeable from 6809
+disk02_02	disk02_02_inst (
+	.data (DATA_OUT),
+	.rdaddress (ADDRESS_02[11:0]),
+	.rdclock (PH2_02),
+	.wraddress ({SLAVE_ADD_HI[3:0], SLAVE_ADD_LO}),
+	.wrclock (PH_2),
+	.wren (!RW_N & SLAVE_WR & !SLAVE_ADD_HI[4]),
+	.q (DATAO2_02_HDD)
+	);
+// 4K Firmware block at $3000 Writeable from 6809
+disk02_02	disk02_03_inst (
+	.data (DATA_OUT),
+	.rdaddress (ADDRESS_02[11:0]),
+	.rdclock (PH2_02),
+	.wraddress ({SLAVE_ADD_HI[3:0], SLAVE_ADD_LO}),
+	.wrclock (PH_2),
+	.wren (!RW_N & SLAVE_WR & SLAVE_ADD_HI[4]),
+	.q (DATAO2_03_HDD)
+	);
+
 // 512 byte 6502 to 6809 buffer (Read Sector)
 buffer_dp	buffer_dp_read (
 	.data (DATA_OUT_02),
@@ -451,6 +502,30 @@ FIFO_WRITE	FIFO_WRITE_inst (
 	.wrfull ( WRFIFO_WRFULL )
 	);
 
+FIFO_1024	WF_FIFO_READ_inst (
+	.aclr ( !RESET_N ),
+	.data ( DATA_OUT_02 ),
+	.rdclk ( PH_2 ),
+	.rdreq ( WF_RDFIFO_RDREQ ),
+	.wrclk ( PH2_02 ),
+	.wrreq ( WF_RDFIFO_WRREQ ),
+	.q ( WF_RDFIFO_DATA ),
+	.rdempty ( WF_RDFIFO_RDEMPTY ),
+	.wrfull ( WF_RDFIFO_WRFULL )
+	);
+
+FIFO_WRITE	WF_FIFO_WRITE_inst (
+	.aclr ( !RESET_N ),
+	.data ( DATA_OUT ),
+	.rdclk ( PH2_02 ),
+	.rdreq ( WF_WRFIFO_RDREQ ),
+	.wrclk ( PH_2 ),
+	.wrreq ( WF_WRFIFO_WRREQ ),
+	.q ( WF_WRFIFO_DATA ),
+	.rdempty ( WF_WRFIFO_RDEMPTY ),
+	.wrfull ( WF_WRFIFO_WRFULL )
+	);
+
 glb6850 COM1(
 .RESET_N(RESET_N),
 .RX_CLK(UART1_CLK),
@@ -467,6 +542,24 @@ glb6850 COM1(
 .RTS(UART50_RTS),
 .CTS(UART50_RTS),
 .DCD(UART50_RTS)
+);
+
+glb6850 COM2(
+.RESET_N(RESET_N),
+.RX_CLK(WF_CLOCK),
+.TX_CLK(WF_CLOCK),
+.E(PH2_02),
+.DI(DATA_OUT_02),
+.DO(DATA_COM2),
+.CS(COM2_EN),
+.RW_N(RW_02_N),
+.IRQ(IRQ_02_UART_2),
+.RS(ADDRESS_02[0]),
+.TXDATA(WF_TXD),
+.RXDATA(WF_RXD),
+.RTS(WF_RTS),
+.CTS(WF_RTS),
+.DCD(WF_RTS)
 );
 
 /******************************************************************************
@@ -593,7 +686,25 @@ begin
 		endcase
 	end
 end
-
+assign BI_TO_RST = !RDFIFO_RDEMPTY | ({RW_N,HDD_EN, ADDRESS[3:0]} == 6'h11);
+always @ (negedge V_SYNC or posedge BI_TO_RST)
+begin
+	if(BI_TO_RST)
+	begin
+		BI_TIMER <= 8'h00;
+	end
+	else
+	begin
+		if(BI_TIMER != 8'hFF)
+			BI_TIMER <= BI_TIMER + 1'h01;
+	end
+end
+always @(negedge PH2_02)
+begin
+	DBUF_BI_TO <= (BI_TIMER != 8'hFF);
+	DBUF_BI_TO1 <= DBUF_BI_TO;
+	BI_TO <= DBUF_BI_TO1;
+end
 assign	DATA_HDD =		({HDD_EN, ADDRESS[3:0]} == 5'h10)	?	{HALT_EN, 
 																DRIVE_SEL_EXT[3],
 																DENSITY, 
@@ -602,7 +713,8 @@ assign	DATA_HDD =		({HDD_EN, ADDRESS[3:0]} == 5'h10)	?	{HALT_EN,
 																DRIVE_SEL_EXT[2:0]}:
 						({HDD_EN, ADDRESS[3:0]} == 5'h11)	?	{IRQ_09,
 																ADDR_RST_BUFF1_N,
-																4'h0,
+																3'h0,
+																BI_TO,
 																!RDFIFO_RDEMPTY,
 																BI_IRQ_EN}:
 						({HDD_EN, ADDRESS[3:0]} == 5'h12)	?	RDFIFO_DATA:
@@ -623,6 +735,12 @@ assign RDFIFO_RDREQ =	({HDD_EN, ADDRESS[3:0], RW_N, RDFIFO_RDEMPTY} == 7'b100101
 																							1'b0;
 assign WRFIFO_WRREQ =	({HDD_EN, ADDRESS[3:0], RW_N, WRFIFO_WRFULL}  == 7'b1001000)	?	1'b1:
 																							1'b0;
+
+assign WF_RDFIFO_RDREQ =	({RW_N, ADDRESS[15:0]} == 17'h1FF6D)								?	1'b1:				//FF6D
+																														1'b0;
+assign WF_WRFIFO_WRREQ =	({RW_N, WF_WRFIFO_WRFULL,  ADDRESS[15:0]} == 18'h0FF6D)		?	1'b1:				//FF6D
+																														1'b0;
+
 I2C GLB_I2C(
 .CLOCK(MCLOCK[6]),
 .RESET_N(RESET_N),
@@ -634,6 +752,7 @@ I2C GLB_I2C(
 .REGISTER(I2C_REG),
 .DATA_IN(I2C_DATA_IN),
 .DATA_OUT(I2C_DATA_OUT),
+.STATE(I2C_STATE),
 .DONE(I2C_DONE),
 .FAIL(I2C_FAIL),
 .RW_N(I2C_DEVICE[0]),
