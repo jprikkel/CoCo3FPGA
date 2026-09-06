@@ -1,20 +1,21 @@
 ////////////////////////////////////////////////////////////////////////////////
-// Project Name:	CoCo3FPGA Version 3.0
-// File Name:		coco3vid.v
+// Project Name:	CoCo3FPGA Version 4.0
+// File Name:		coco3fpga.v
 //
 // CoCo3 in an FPGA
 //
-// Revision: 3.0 08/15/15
+// Revision: 4.0 07/10/16
 ////////////////////////////////////////////////////////////////////////////////
 //
 // CPU section copyrighted by John Kent
 // The FDC co-processor copyrighted Daniel Wallner.
+// SDRAM Controller copyrighted by XESS Corp.
 //
 ////////////////////////////////////////////////////////////////////////////////
 //
 // Color Computer 3 compatible system on a chip
 //
-// Version : 3.0
+// Version : 4.0
 //
 // Copyright (c) 2008 Gary Becker (gary_l_becker@yahoo.com)
 //
@@ -55,9 +56,12 @@
 //
 // File history :
 //
-//  1.0		Full Release
-//  2.0		Partial Release
-//  3.0		Full Release
+//  1.0			Full Release
+//  2.0			Partial Release
+//  3.0			Full Release
+//  3.0.0.1		Update to fix DoD interrupt issue
+//	3.0.1.0		Update to fix 32/40 CoCO3 Text issue and add 2 Meg max memory
+//	4.0.X.X		Full Release
 ////////////////////////////////////////////////////////////////////////////////
 // Gary Becker
 // gary_L_becker@yahoo.com
@@ -67,9 +71,9 @@ module COCO3VIDEO(
 PIX_CLK,
 RESET_N,
 COLOR,
-HSYNC,
+HSYNC_N,
 SYNC_FLAG,
-VSYNC,
+VSYNC_N,
 HBLANKING,
 VBLANKING,
 RAM_ADDRESS,
@@ -88,7 +92,7 @@ HRES,
 CRES,
 HVEN,
 HOR_OFFSET,
-SCRN_START_HSB,		// 2 extra bits for 2MB screen start
+SCRN_START_HSB,		// 4 extra bits for 8MB screen start
 SCRN_START_MSB,
 SCRN_START_LSB,
 BLINK,
@@ -97,22 +101,24 @@ SWITCH5
 
 input					PIX_CLK;
 input					RESET_N;
-output		[8:0]		COLOR;
-reg			[8:0]		COLOR;
-output				HSYNC;
-reg					HSYNC;
+output		[9:0]		COLOR;
+reg			[9:0]		COLOR;
+output				HSYNC_N;
+reg					HSYNC_N;
 output				SYNC_FLAG;
 reg					SYNC_FLAG;
-output				VSYNC;
-reg					VSYNC;
+output				VSYNC_N;
+reg					VSYNC_N;
 output				HBLANKING;
 reg					HBLANKING;
 output				VBLANKING;
 reg					VBLANKING;
 //output	[17:0]	RAM_ADDRESS;	// 512Kb
 //reg		[17:0]	RAM_ADDRESS;
-output	[19:0]	RAM_ADDRESS;	// 2MB
-reg		[19:0]	RAM_ADDRESS;
+//output	[19:0]	RAM_ADDRESS;	// 2MB
+//reg		[19:0]	RAM_ADDRESS;
+output	[21:0]	RAM_ADDRESS;	// 8MB
+reg		[21:0]	RAM_ADDRESS;
 input		[15:0]	RAM_DATA;
 input					COCO;
 input		[2:0]		V;
@@ -128,7 +134,7 @@ input		[3:0]		HRES;
 input		[1:0]		CRES;
 input					HVEN;
 input		[6:0]		HOR_OFFSET;
-input		[1:0]		SCRN_START_HSB;	// extra 2 bits for 2MB
+input		[3:0]		SCRN_START_HSB;	// extra 4 bits for 8MB
 input		[7:0]		SCRN_START_MSB;
 input		[7:0]		SCRN_START_LSB;
 input					BLINK;
@@ -141,12 +147,10 @@ reg		[15:0]	CHAR_LATCH_0;
 reg		[15:0]	CHAR_LATCH_1;
 reg		[15:0]	CHAR_LATCH_2;
 reg		[15:0]	CHAR_LATCH_3;
-`ifndef NEW_SRAM
 reg		[15:0]	CHAR_LATCH_4;
 reg		[15:0]	CHAR_LATCH_5;
 reg		[15:0]	CHAR_LATCH_6;
 reg		[15:0]	CHAR_LATCH_7;
-`endif
 wire		[3:0]		PIXEL_ORDER;
 reg		[7:0]		CHARACTER0;
 reg		[7:0]		CHARACTER1;
@@ -157,7 +161,7 @@ reg					UNDERLINE;
 wire					MODE_256;
 
 reg		[10:0]	ROM_ADDRESS;
-wire		[19:0]	RAM_ADDRESS_X;		// 17:0 512kb
+wire		[21:0]	RAM_ADDRESS_X;		// 17:0 512kb
 wire		[7:0]		ROM_DATA1;
 wire		[3:0]		LINES_ROW;
 reg		[3:0]		NUM_ROW;
@@ -206,14 +210,21 @@ reg		[15:0]	COLOR4;
 reg		[15:0]	COLOR5;
 reg		[15:0]	COLOR6;
 reg		[15:0]	COLOR7;
-reg		[20:0]	ROW_ADD;		// 18:0 for 512kb
+reg		[22:0]	ROW_ADD;		// 18:0 for 512kb
 wire		[8:0]		ROW_OFFSET;
-wire		[20:0]	SCREEN_OFF;	// 18:0 for 512kb
+reg		[9:0]		ROW_OFFSET_X;
+wire		[9:0]		ROW_OFFSET_Y;
+wire		[9:0]		ROW_OFFSET_Z;
+wire		[9:0]		ROW_OFFSET_Y0;
+wire		[9:0]		ROW_OFFSET_Z0;
+reg		[6:0]		HOR_OFFSET_BUF;
+wire		[22:0]	SCREEN_OFF;	// 18:0 for 512kb
 reg					VBORDER;
 reg					HBORDER;
-wire		[8:0]		BORDER;
-wire		[8:0]		CCOLOR;
+wire		[9:0]		BORDER;
+wire		[9:0]		CCOLOR;
 wire					MODE6;
+reg		[2:0]		INC;
 
 parameter PALETTE0 = 4'h0;
 parameter PALETTE1 = 4'h1;
@@ -242,7 +253,12 @@ COCO3GEN coco3gen(
 /*****************************************************************************
 * Read RAM
 ******************************************************************************/
-assign RAM_ADDRESS_X = {ROW_ADD[20:1] + ROW_OFFSET};
+assign ROW_OFFSET_Y0 = {1'b0, ROW_OFFSET} + HOR_OFFSET_BUF;
+assign ROW_OFFSET_Z0 = (!HVEN)	?	ROW_OFFSET_Y0:
+											{2'b000, ROW_OFFSET_Y0[6:0]};
+assign ROW_OFFSET_Y = ROW_OFFSET_X + HOR_OFFSET_BUF + INC;
+assign ROW_OFFSET_Z = (!HVEN)	?	ROW_OFFSET_Y:
+											{2'b000, ROW_OFFSET_Y[6:0]};
 
 assign ROW_OFFSET =																			//9 bits of two byte reads = 1024 max bytes
 // CoCo1 low res graphics (64 pixels / 2 bytes)
@@ -267,19 +283,22 @@ assign ROW_OFFSET =																			//9 bits of two byte reads = 1024 max byte
 				({COCO,BP,HRES}==6'b011011)	?	           PIXEL_COUNT[9:1] :	//640 bytes / line
 // CoCo1 Text and SEMIGRAPHICS
 															{4'b0000,  PIXEL_COUNT[9:5]};	//32 characters / line
+
 assign COCO3_VLPR = VLPR + 2'b11;
-`ifndef NEW_SRAM
 always @ (negedge PIX_CLK)
 begin
 		case (PIXEL_COUNT[3:0])
 		4'b0000:
 		begin
-			RAM_ADDRESS <= RAM_ADDRESS_X;
+			ROW_OFFSET_X <= ROW_OFFSET;
+			INC <= 3'b001;
+			RAM_ADDRESS <=	ROW_ADD[22:1] + ROW_OFFSET_Z0;
 			CHAR_LATCH_7 <= RAM_DATA[15:0];
 		end
 		4'b0010:
 		begin
-			RAM_ADDRESS <= RAM_ADDRESS + 1'b1;
+			INC <= 3'b010;
+			RAM_ADDRESS <=	ROW_ADD[22:1] + ROW_OFFSET_Z;
 			if(({PIXEL_COUNT[5],PIXEL_COUNT[4]} !=2'b00)
 			&(({COCO,V[0]}==2'b11)											// CoCo1 16 byte / line mode
          |({COCO,BP,HRES[3],HRES[2],HRES[1]}==5'b01000)))		// CoCo3 16/20 bytes/line
@@ -290,7 +309,8 @@ begin
 			begin
 				if(PIXEL_COUNT[4]
 				&((COCO)															// All other CoCo1 modes
-				|({COCO,BP,HRES[3],HRES[2],HRES[1]}==5'b01001)))	//CoCo3 32/40 bytes/line ?????? might have to add text differences
+				|({COCO,BP,HRES[3],HRES[2],CRES[0]}==5'b00000)		// CoCo3 32/40 XText
+				|({COCO,BP,HRES[3],HRES[2],HRES[1]}==5'b01001)))	//CoCo3 32/40 bytes/line
 				begin
 					CHAR_LATCH_0 <= {8'h00,CHAR_LATCH_0[15:8]};
 				end
@@ -314,12 +334,14 @@ begin
 		end
 		4'b0100:
 		begin
-			RAM_ADDRESS <= RAM_ADDRESS + 1'b1;
+			INC <= 3'b011;
+			RAM_ADDRESS <=	ROW_ADD[22:1] + ROW_OFFSET_Z;
 			CHAR_LATCH_1 <= RAM_DATA[15:0];
 		end
 		4'b0110:
 		begin
-			RAM_ADDRESS <= RAM_ADDRESS + 1'b1;
+			INC <= 3'b100;
+			RAM_ADDRESS <=	ROW_ADD[22:1] + ROW_OFFSET_Z;
 			CHAR_LATCH_2 <= RAM_DATA[15:0];
 // Underline
 			if({COCO,CRES[0],CHAR_LATCH_0[14],UNDERLINE} == 4'b0111)				// Removed BP because we ignore characters during BP
@@ -331,12 +353,14 @@ begin
 		end
 		4'b1000:
 		begin
-			RAM_ADDRESS <= RAM_ADDRESS + 1'b1;
+			INC <= 3'b101;
+			RAM_ADDRESS <=	ROW_ADD[22:1] + ROW_OFFSET_Z;
 			CHAR_LATCH_3 <= RAM_DATA[15:0];
 		end
 		4'b1010:
 		begin
-			RAM_ADDRESS <= RAM_ADDRESS + 1'b1;
+			INC <= 3'b110;
+			RAM_ADDRESS <=	ROW_ADD[22:1] + ROW_OFFSET_Z;
 			CHAR_LATCH_4 <= RAM_DATA[15:0];
 //XTEXT only, so no underline
 			CHARACTER1 <=	ROM_DATA1;
@@ -344,12 +368,14 @@ begin
 		end
 		4'b1100:
 		begin
-			RAM_ADDRESS <= RAM_ADDRESS + 1'b1;
+			INC <= 3'b111;
+			RAM_ADDRESS <=	ROW_ADD[22:1] + ROW_OFFSET_Z;
 			CHAR_LATCH_5 <= RAM_DATA[15:0];			// last read from the previous series
 		end
 		4'b1110:
 		begin
-			RAM_ADDRESS <= RAM_ADDRESS + 1'b1;
+			INC <= 3'b000;
+			RAM_ADDRESS <=	ROW_ADD[22:1] + ROW_OFFSET_Z;
 			CHAR_LATCH_6 <= RAM_DATA[15:0];			// First read of this series
 // Underline
 			if({COCO,BP,CRES[0],CHAR_LATCH_1[14],UNDERLINE} == 5'b00111)
@@ -360,81 +386,6 @@ begin
 		end
 		endcase
 end
-`else
-always @ (negedge PIX_CLK)
-begin
-		case (PIXEL_COUNT[3:0])
-		4'b0000:
-		begin
-			RAM_ADDRESS <= RAM_ADDRESS_X;
-			CHAR_LATCH_3 <= RAM_DATA[15:0];
-		end
-		4'b0100:
-		begin
-			RAM_ADDRESS <= RAM_ADDRESS + 1'b1;
-			if(({PIXEL_COUNT[5],PIXEL_COUNT[4]} !=2'b00)
-			&(({COCO,V[0]}==2'b11)											// CoCo1 16 byte / line mode
-         |({COCO,BP,HRES[3],HRES[2],HRES[1]}==5'b01000)))		// CoCo3 16/20 bytes/line
-			begin
-				CHAR_LATCH_0 <= {CHAR_LATCH_0[11:8],4'h0,CHAR_LATCH_0[3:0],CHAR_LATCH_0[15:12]}; // Rotate into position on 16/20 bytes/line
-			end
-			else
-			begin
-				if(PIXEL_COUNT[4]
-				&((COCO)															// All other CoCo1 modes
-				|({COCO,BP,HRES[3],HRES[2],HRES[1]}==5'b01001)))	//CoCo3 32/40 bytes/line ?????? might have to add text differences
-				begin
-					CHAR_LATCH_0 <= {8'h00,CHAR_LATCH_0[15:8]};
-				end
-				else
-				begin
-					CHAR_LATCH_0 <= RAM_DATA[15:0];					// Everything else
-				end
-			end
-		end
-		4'b0101:
-		begin
-			if(!COCO)
-				ROM_ADDRESS <=	{CHAR_LATCH_0[6:0],COCO3_VLPR[3:0]};								// COCO3 Text 1 (40 and 80)
-			else
-			begin
-				if({COCO,VID_CONT[0],CHAR_LATCH_0[6:5]} == 4'b1100)
-					ROM_ADDRESS <=	{2'b11,	CHAR_LATCH_0[4:0],	COCO1_VLPR};					// COCO1 Text 1 with LC
-				else
-					ROM_ADDRESS <=	{~CHAR_LATCH_0[5],	CHAR_LATCH_0[5:0],	COCO1_VLPR};				// COCO1 Text 1 w/o LC
-			end
-		end
-		4'b1000:
-		begin
-			RAM_ADDRESS <= RAM_ADDRESS + 1'b1;
-			CHAR_LATCH_1 <= RAM_DATA[15:0];
-// Underline
-			if({COCO,CRES[0],CHAR_LATCH_0[14],UNDERLINE} == 4'b0111)				// Removed BP because we ignore characters during BP
-				CHARACTER0 <=	8'hFF;
-// Not Underline
-			else
-				CHARACTER0 <=	ROM_DATA1;
-			ROM_ADDRESS <=	{CHAR_LATCH_0[14:8],COCO3_VLPR[3:0]};								// COCO3 Text 1 (40 and 80)
-		end
-		4'b1010:
-		begin
-//XTEXT only, so no underline
-			CHARACTER1 <=	ROM_DATA1;
-			ROM_ADDRESS <=	{CHAR_LATCH_1[6:0],COCO3_VLPR[3:0]};								// COCO3 Text 1 (40 and 80)
-		end
-		4'b1100:
-		begin
-			RAM_ADDRESS <= RAM_ADDRESS + 1'b1;
-			CHAR_LATCH_2 <= RAM_DATA[15:0];
-			if({COCO,BP,CRES[0],CHAR_LATCH_1[14],UNDERLINE} == 5'b00111)
-				CHARACTER2 <=	8'hFF;
-			else
-// Not Underline
-				CHARACTER2 <=	ROM_DATA1;
-		end
-		endcase
-end
-`endif
 /*****************************************************************************
 * Read Character ROM
 ******************************************************************************/
@@ -1176,14 +1127,10 @@ assign PIXEL8 =
 			({COCO,BP,CRES,CHAR_LATCH_2[7:4]} == 8'b01101110)						?	PALETTEE:
 			({COCO,BP,CRES,CHAR_LATCH_2[7:4]} == 8'b01101111)						?	PALETTEF:
 // 256 color mode
-`ifndef NEW_SRAM
 			({COCO,BP,CRES} == 4'b0111)													?	CHAR_LATCH_4[3:0]:
-`endif
 																										PALETTE8;
 assign PIXEL18 =
-`ifndef NEW_SRAM
 			({COCO,BP,CRES} == 4'b0111)													?	CHAR_LATCH_4[7:4]:
-`endif
 																										4'h0;
 
 assign PIXEL9 =
@@ -1234,14 +1181,10 @@ assign PIXEL9 =
 			({COCO,BP,CRES,CHAR_LATCH_2[3:0]} == 8'b01101110)						?	PALETTEE:
 			({COCO,BP,CRES,CHAR_LATCH_2[3:0]} == 8'b01101111)						?	PALETTEF:
 // 256 color mode
-`ifndef NEW_SRAM
 			({COCO,BP,CRES} == 4'b0111)													?	CHAR_LATCH_4[11:8]:
-`endif
 																										PALETTE8;
 assign PIXEL19 =
-`ifndef NEW_SRAM
 			({COCO,BP,CRES} == 4'b0111)													?	CHAR_LATCH_4[15:12]:
-`endif
 																										4'h0;
 
 assign PIXELA =
@@ -1292,14 +1235,10 @@ assign PIXELA =
 			({COCO,BP,CRES,CHAR_LATCH_2[15:12]} == 8'b01101110)						?	PALETTEE:
 			({COCO,BP,CRES,CHAR_LATCH_2[15:12]} == 8'b01101111)						?	PALETTEF:
 // 256 color mode
-`ifndef NEW_SRAM
 			({COCO,BP,CRES} == 4'b0111)													?	CHAR_LATCH_5[3:0]:
-`endif
 																										PALETTE8;
 assign PIXEL1A =
-`ifndef NEW_SRAM
 			({COCO,BP,CRES} == 4'b0111)													?	CHAR_LATCH_5[7:4]:
-`endif
 																										4'h0;
 
 assign PIXELB =
@@ -1350,14 +1289,10 @@ assign PIXELB =
 			({COCO,BP,CRES,CHAR_LATCH_2[11:8]} == 8'b01101110)						?	PALETTEE:
 			({COCO,BP,CRES,CHAR_LATCH_2[11:8]} == 8'b01101111)						?	PALETTEF:
 // 256 color mode
-`ifndef NEW_SRAM
 			({COCO,BP,CRES} == 4'b0111)													?	CHAR_LATCH_5[11:8]:
-`endif
 																										PALETTE8;
 assign PIXEL1B =
-`ifndef NEW_SRAM
 			({COCO,BP,CRES} == 4'b0111)													?	CHAR_LATCH_5[15:12]:
-`endif
 																										4'h0;
 
 assign PIXELC =
@@ -1408,14 +1343,10 @@ assign PIXELC =
 			({COCO,BP,CRES,CHAR_LATCH_3[7:4]} == 8'b01101110)						?	PALETTEE:
 			({COCO,BP,CRES,CHAR_LATCH_3[7:4]} == 8'b01101111)						?	PALETTEF:
 // 256 color mode
-`ifndef NEW_SRAM
 			({COCO,BP,CRES} == 4'b0111)													?	CHAR_LATCH_6[3:0]:
-`endif
 																										PALETTE8;
 assign PIXEL1C =
-`ifndef NEW_SRAM
 			({COCO,BP,CRES} == 4'b0111)													?	CHAR_LATCH_6[7:4]:
-`endif
 																										4'h0;
 
 assign PIXELD =
@@ -1466,15 +1397,11 @@ assign PIXELD =
 			({COCO,BP,CRES,CHAR_LATCH_3[3:0]} == 8'b01101110)						?	PALETTEE:
 			({COCO,BP,CRES,CHAR_LATCH_3[3:0]} == 8'b01101111)						?	PALETTEF:
 // 256 color mode
-`ifndef NEW_SRAM
 			({COCO,BP,CRES} == 4'b0111)													?	CHAR_LATCH_6[11:8]:
-`endif
 																										PALETTE8;
 
 assign PIXEL1D =
-`ifndef NEW_SRAM
 			({COCO,BP,CRES} == 4'b0111)													?	CHAR_LATCH_6[15:12]:
-`endif
 																										4'h0;
 
 assign PIXELE =
@@ -1525,15 +1452,11 @@ assign PIXELE =
 			({COCO,BP,CRES,CHAR_LATCH_3[15:12]} == 8'b01101110)						?	PALETTEE:
 			({COCO,BP,CRES,CHAR_LATCH_3[15:12]} == 8'b01101111)						?	PALETTEF:
 // 256 color mode
-`ifndef NEW_SRAM
 			({COCO,BP,CRES} == 4'b0111)													?	CHAR_LATCH_7[3:0]:
-`endif
 																										PALETTE8;
 
 assign PIXEL1E =
-`ifndef NEW_SRAM
 			({COCO,BP,CRES} == 4'b0111)													?	CHAR_LATCH_7[7:4]:
-`endif
 																										4'h0;
 
 assign PIXELF =
@@ -1584,14 +1507,10 @@ assign PIXELF =
 			({COCO,BP,CRES,CHAR_LATCH_3[11:8]} == 8'b01101110)						?	PALETTEE:
 			({COCO,BP,CRES,CHAR_LATCH_3[11:8]} == 8'b01101111)						?	PALETTEF:
 // 256 color mode
-`ifndef NEW_SRAM
 			({COCO,BP,CRES} == 4'b0111)													?	CHAR_LATCH_7[11:8]:
-`endif
 																										PALETTE8;
 assign PIXEL1F =
-`ifndef NEW_SRAM
 			({COCO,BP,CRES} == 4'b0111)													?	CHAR_LATCH_7[15:12]:
-`endif
 																										4'h0;
 
 /*****************************************************************************
@@ -1681,10 +1600,8 @@ assign PIXEL_ORDER =
 
 // 256/320 bytes/line 256 color
 							({COCO,BP,HRES[3:1],CRES} == 7'b0110011)						?	2'b01:				// 2x HR pixels per G pixel
-`ifndef NEW_SRAM
 // 512/640 bytes/line 256 color
 							({COCO,BP,HRES[3:1],CRES} == 7'b0110111)						?	2'b00:				// 1x HR pixels per G pixel
-`endif
 																											2'b10;				// 4x HR pixels per ? pixel, DEFAULT
 
 always @ (negedge PIX_CLK)
@@ -1801,57 +1718,64 @@ begin
 end
 
 assign BORDER =
-			({COCO,VID_CONT[3]} == 2'b10)								?	9'h100:			//Black
-			({COCO,VID_CONT[3],VID_CONT[0],CSS} == 4'b1111)		?	{5'h00,PALETTEB}:
-			({COCO,VID_CONT[3],VID_CONT[0],CSS} == 4'b1110)		?	{5'h00,PALETTE9}:
-			({COCO,VID_CONT[3],VID_CONT[0],CSS} == 4'b1101)		?	{5'h00,PALETTE4}:
-			({COCO,VID_CONT[3],VID_CONT[0],CSS} == 4'b1100)		?	{5'h00,PALETTE0}:
-																					9'h010;			//BDR_PAL
+			({COCO,VID_CONT[3]} == 2'b10)								?	10'h200:					//Black
+			({COCO,VID_CONT[3],VID_CONT[0],CSS} == 4'b1111)		?	{6'h00,PALETTEB}:
+			({COCO,VID_CONT[3],VID_CONT[0],CSS} == 4'b1110)		?	{6'h00,PALETTE9}:
+			({COCO,VID_CONT[3],VID_CONT[0],CSS} == 4'b1101)		?	{6'h00,PALETTE4}:
+			({COCO,VID_CONT[3],VID_CONT[0],CSS} == 4'b1100)		?	{6'h00,PALETTE0}:
+																					10'h010;					//BDR_PAL
 
 always @ (negedge PIX_CLK)
 begin
 	COLOR <= CCOLOR;
 end
 
-assign CCOLOR[8] = ({VBLANKING,HBLANKING} == 2'b00)				?	({COCO,BP,CRES} == 4'b0111):			//normal screen area
-		({(VBORDER&HBORDER),(VBLANKING|HBLANKING)} == 2'b11)	?	BORDER[8]:										// Border
-																					1'b1;												// Retrace
+assign CCOLOR[9] = ({VBLANKING,HBLANKING} == 2'b00)			?	1'b0:											//normal screen area
+		({(VBORDER&HBORDER),(VBLANKING|HBLANKING)} == 2'b11)	?	BORDER[9]:									// Border
+																					1'b1;											// Retrace
 
-assign CCOLOR[7] = ({VBLANKING,HBLANKING} == 2'b00)				?	COLOR7[PIXEL_COUNT[3:0]]:				// Normal screeen area
-		({(VBORDER&HBORDER),(VBLANKING|HBLANKING)} == 2'b11)	?	BORDER[7]:										// Border
-																					1'b0;												// Retrace
+assign CCOLOR[8] = ({VBLANKING,HBLANKING} == 2'b00)			?	({COCO,BP,CRES} == 4'b0111):			//normal screen area
+		({(VBORDER&HBORDER),(VBLANKING|HBLANKING)} == 2'b11)	?	BORDER[8]:									// Border
+																					1'b0;											// Retrace
 
-assign CCOLOR[6] = ({VBLANKING,HBLANKING} == 2'b00)				?	COLOR6[PIXEL_COUNT[3:0]]:				// Normal screeen area
-		({(VBORDER&HBORDER),(VBLANKING|HBLANKING)} == 2'b11)	?	BORDER[6]:										// Border
-																					1'b0;												// Retrace
+assign CCOLOR[7] = ({VBLANKING,HBLANKING} == 2'b00)			?	COLOR7[PIXEL_COUNT[3:0]]:				// Normal screeen area
+		({(VBORDER&HBORDER),(VBLANKING|HBLANKING)} == 2'b11)	?	BORDER[7]:									// Border
+																					1'b0;											// Retrace
 
-assign CCOLOR[5] = ({VBLANKING,HBLANKING} == 2'b00)				?	COLOR5[PIXEL_COUNT[3:0]]:				// Normal screeen area
-		({(VBORDER&HBORDER),(VBLANKING|HBLANKING)} == 2'b11)	?	BORDER[5]:										// Border
-																					1'b0;												// Retrace
+assign CCOLOR[6] = ({VBLANKING,HBLANKING} == 2'b00)			?	COLOR6[PIXEL_COUNT[3:0]]:				// Normal screeen area
+		({(VBORDER&HBORDER),(VBLANKING|HBLANKING)} == 2'b11)	?	BORDER[6]:									// Border
+																					1'b0;											// Retrace
 
-assign CCOLOR[4] = ({VBLANKING,HBLANKING} == 2'b00)				?	COLOR4[PIXEL_COUNT[3:0]]:				// Normal screeen area
-		({(VBORDER&HBORDER),(VBLANKING|HBLANKING)} == 2'b11)	?	BORDER[4]:										// Border
-																					1'b0;												// Retrace
+assign CCOLOR[5] = ({VBLANKING,HBLANKING} == 2'b00)			?	COLOR5[PIXEL_COUNT[3:0]]:				// Normal screeen area
+		({(VBORDER&HBORDER),(VBLANKING|HBLANKING)} == 2'b11)	?	BORDER[5]:									// Border
+																					1'b0;											// Retrace
 
-assign CCOLOR[3] = ({VBLANKING,HBLANKING} == 2'b00)				?	COLOR3[PIXEL_COUNT[3:0]]:				// Normal screeen area
-		({(VBORDER&HBORDER),(VBLANKING|HBLANKING)} == 2'b11)	?	BORDER[3]:										// Border
-																					1'b0;												// Retrace
+assign CCOLOR[4] = ({VBLANKING,HBLANKING} == 2'b00)			?	COLOR4[PIXEL_COUNT[3:0]]:				// Normal screeen area
+		({(VBORDER&HBORDER),(VBLANKING|HBLANKING)} == 2'b11)	?	BORDER[4]:									// Border
+																					1'b0;											// Retrace
 
-assign CCOLOR[2] = ({VBLANKING,HBLANKING} == 2'b00)				?	COLOR2[PIXEL_COUNT[3:0]]:				// Normal screeen area
-		({(VBORDER&HBORDER),(VBLANKING|HBLANKING)} == 2'b11)	?	BORDER[2]:										// Border
-																					1'b0;												// Retrace
+assign CCOLOR[3] = ({VBLANKING,HBLANKING} == 2'b00)			?	COLOR3[PIXEL_COUNT[3:0]]:				// Normal screeen area
+		({(VBORDER&HBORDER),(VBLANKING|HBLANKING)} == 2'b11)	?	BORDER[3]:									// Border
+																					1'b0;											// Retrace
 
-assign CCOLOR[1] = ({VBLANKING,HBLANKING} == 2'b00)				?	COLOR1[PIXEL_COUNT[3:0]]:				// Normal screeen area
-		({(VBORDER&HBORDER),(VBLANKING|HBLANKING)} == 2'b11)	?	BORDER[1]:										// Border
-																					1'b0;												// Retrace
+assign CCOLOR[2] = ({VBLANKING,HBLANKING} == 2'b00)			?	COLOR2[PIXEL_COUNT[3:0]]:				// Normal screeen area
+		({(VBORDER&HBORDER),(VBLANKING|HBLANKING)} == 2'b11)	?	BORDER[2]:									// Border
+																					1'b0;											// Retrace
 
-assign CCOLOR[0] = ({VBLANKING,HBLANKING} == 2'b00)				?	COLOR0[PIXEL_COUNT[3:0]]:				// Normal screeen area
-		({(VBORDER&HBORDER),(VBLANKING|HBLANKING)} == 2'b11)	?	BORDER[0]:										// Border
-																					1'b0;												// Retrace
+assign CCOLOR[1] = ({VBLANKING,HBLANKING} == 2'b00)			?	COLOR1[PIXEL_COUNT[3:0]]:				// Normal screeen area
+		({(VBORDER&HBORDER),(VBLANKING|HBLANKING)} == 2'b11)	?	BORDER[1]:									// Border
+																					1'b0;											// Retrace
+
+assign CCOLOR[0] = ({VBLANKING,HBLANKING} == 2'b00)			?	COLOR0[PIXEL_COUNT[3:0]]:				// Normal screeen area
+		({(VBORDER&HBORDER),(VBLANKING|HBLANKING)} == 2'b11)	?	BORDER[0]:									// Border
+																					1'b0;											// Retrace
 
 /*****************************************************************************
 * Count pixels across each line
 * 32 and 40 character modes use double wide pixels
+******************************************************************************
+HBORDER has to be 1 to display a border
+HBlanking is 0 for main display
 ******************************************************************************/
 always @ (negedge PIX_CLK)
 begin
@@ -1859,19 +1783,19 @@ begin
 		10'd013:
 		begin
 			PIXEL_COUNT <= 10'd014;
-			HBORDER <= 1'b1;								//Turn on border for 640 mode
+//			HBORDER <= 1'b1;								//Turn on border for 640 mode
 		end
 		10'd015:				// Turn off horizontal blanking so first character can be displayed
 		begin
 			HBLANKING <= 1'b0;							// Turn off blanking
 			HBORDER <= 1'b1;
-			HSYNC <= 1'b1;									// Not H Sync
+			HSYNC_N <= 1'b1;									// Not H Sync
 			PIXEL_COUNT  <= 10'd016;					// Next step
 		end
 		10'd527:												// 512 + 16 -1
 		begin
 			HBORDER <= 1'b1;
-			HSYNC <= 1'b1;									// Not H Sync
+			HSYNC_N <= 1'b1;									// Not H Sync
 			if(MODE_256)									// 512 mode
 			begin
 				HBLANKING <= 1'b1;						// Turn on blanking
@@ -1886,33 +1810,36 @@ begin
 		10'd655:											// 640 + 16 - 1
 		begin
 			HBLANKING <= 1'b1;						// Blanking on
-			HBORDER <= 1'b1;
-			HSYNC <= 1'b1;								// Not H Sync
+			HBORDER <= 1'b0;
+			HSYNC_N <= 1'b1;								// Not H Sync
 			PIXEL_COUNT  <= 10'd656;
 		end
 		10'd657:											// 648 + 24 - 1
 		begin
 			HBLANKING <= 1'b1;
 			HBORDER <= 1'b0;
-			HSYNC <= 1'b1;
-// added 6 to make total = 794 instead of 800
-			PIXEL_COUNT <= 10'd664;
+			HSYNC_N <= 1'b1;
+			SYNC_FLAG <= !LINE[0];					// Every other line with the first visable line has sync
+// added 2 to make total = 798 instead of 800
+			PIXEL_COUNT <= 10'd660;
+			if(LINE[0])
+				HOR_OFFSET_BUF <= HOR_OFFSET;
 		end
-		10'd671:											// 648 + 24 - 1
+		10'd680:											// 648 + 24 - 1
 		begin
 			HBLANKING <= 1'b1;
 			HBORDER <= 1'b0;
-			HSYNC <= 1'b0;								// Turn on Sync
-			PIXEL_COUNT <= 10'd672;
+			HSYNC_N <= 1'b0;								// Turn on Sync
+			PIXEL_COUNT <= 10'd681;
 		end
-		10'd767:											// 672 + 104 - 1
+		10'd755:											// 672 + 104 - 1
 		begin
 			HBLANKING <= 1'b1;
-			HSYNC <= 1'b1;								// SYNC OFF
+			HSYNC_N <= 1'b1;								// SYNC OFF
 			if(~MODE_256)									// 640 mode
-				PIXEL_COUNT <= 10'd832;				// skip 64
+				PIXEL_COUNT <= 10'd820;				// skip 64
 			else
-				PIXEL_COUNT <= 10'd768;
+				PIXEL_COUNT <= 10'd756;
 		end
 		10'd799:
 		begin
@@ -1922,9 +1849,7 @@ begin
 		10'd863:											// 864 - 1
 		begin
 			PIXEL_COUNT <= 10'd000;
-			HSYNC <= 1'b1;
-			SYNC_FLAG <= LINE[0];					// Every other line with the first visable line has sync
-//			~SYNC_FLAG;
+			HSYNC_N <= 1'b1;
 		end
 		default:
 		begin
@@ -1977,9 +1902,8 @@ assign SG6 =	VLPR[3:2];
 ******************************************************************************/
 assign SCREEN_OFF =
 // CoCo1 low res graphics (64 pixels / 2 bytes)
-({COCO,V[0]} == 2'b11)											?	ROW_ADD + 10'd16:
+({HVEN,COCO,V[0]} == 3'b011)									?	ROW_ADD + 10'd16:
 //HR Text
-({HVEN,COCO} == 2'b10)											?  ROW_ADD + 10'd256:
 ({HVEN,COCO,BP,HRES[3:2],CRES[0],HRES[0]}==6'b0000000)?	ROW_ADD + 10'd32:
 ({HVEN,COCO,BP,HRES[3:2],CRES[0],HRES[0]}==6'b0000001)?	ROW_ADD + 10'd40:
 ({HVEN,COCO,BP,HRES[3:2],CRES[0],HRES[0]}==6'b0000010)?	ROW_ADD + 10'd64:
@@ -2006,6 +1930,8 @@ assign SCREEN_OFF =
 						({HVEN,COCO,BP,HRES}==7'b0011001)	?	ROW_ADD + 10'd320:
 						({HVEN,COCO,BP,HRES}==7'b0011010)	?	ROW_ADD + 10'd512:
 						({HVEN,COCO,BP,HRES}==7'b0011011)	?	ROW_ADD + 10'd640:
+
+						(HVEN)										?  ROW_ADD + 10'd256:
 // CoCo1 Text
 																			ROW_ADD + 9'd32;
 
@@ -2013,7 +1939,7 @@ assign SCREEN_OFF =
 * Keeps track of how many lines are in each row.
 * There are 2X lines per coco line.
 ******************************************************************************/
-always @ (negedge HSYNC or posedge VBLANKING)
+always @ (negedge HSYNC_N or posedge VBLANKING)
 begin
 	if(VBLANKING)
 	begin
@@ -2024,7 +1950,8 @@ begin
 		COCO1_VLPR <= 4'h0;
 		if(~COCO)
 		begin
-			ROW_ADD <= {SCRN_START_HSB,SCRN_START_MSB,SCRN_START_LSB,3'h0} + {HOR_OFFSET, 1'b0};
+			ROW_ADD <= {SCRN_START_HSB,SCRN_START_MSB,SCRN_START_LSB,3'h0};
+//			ROW_ADD <= {SCRN_START_HSB,SCRN_START_MSB,SCRN_START_LSB,3'h0} + {HOR_OFFSET, 1'b0};
 			if(BP)						// Vertical Fine Scroll not in graphics modes
 			begin
 				VLPR <= 4'h0;
@@ -2045,7 +1972,8 @@ begin
 		else
 		begin
 			VLPR <= 4'h0;
-			ROW_ADD <= {SCRN_START_HSB,SCRN_START_MSB[7:5],VERT,SCRN_START_LSB[5:0],3'h0} + {HOR_OFFSET, 1'b0};
+			ROW_ADD <= {SCRN_START_HSB,SCRN_START_MSB[7:5],VERT,SCRN_START_LSB[5:0],3'h0};
+//			ROW_ADD <= {SCRN_START_HSB,SCRN_START_MSB[7:5],VERT,SCRN_START_LSB[5:0],3'h0} + {HOR_OFFSET, 1'b0};
 		end
 	end
 	else
@@ -2321,13 +2249,13 @@ end
 *	10					210
 *	11					225	(25*9)
 ******************************************************************************/
-always @ (negedge HSYNC or negedge RESET_N)
+always @ (posedge HSYNC_N or negedge RESET_N)
 begin
 	if(~RESET_N)
 	begin
 		LINE <= 10'd00;
 		VBLANKING <= 1'b0;
-		VSYNC <= 1'b1;
+		VSYNC_N <= 1'b1;
 	end
 	else
 	case (LINE)
@@ -2369,16 +2297,16 @@ begin
 	end
 // End of Porch, start of sync
 // Start of Sync is a 1 to 0
-	10'd473:
+	10'd475:
 	begin
-		LINE <= 10'd474;
-		VSYNC <= 1'b0;					// Sync on
+		LINE <= 10'd476;
+		VSYNC_N <= 1'b0;					// Sync on
 	end
 // End of sync, start of blanking and porch
-	10'd479:
+	10'd483:
 	begin
-		LINE <= 10'd480;
-		VSYNC <= 1'b1;					// Sync off
+		LINE <= 10'd484;
+		VSYNC_N <= 1'b1;					// Sync off
 	end
 // End of porch, start of border
 	10'd505:
